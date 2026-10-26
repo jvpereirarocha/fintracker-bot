@@ -1,0 +1,159 @@
+import json
+from datetime import date
+from decimal import Decimal
+
+import httpx
+import pytest
+
+from bot.domain import TransactionDraft, TypeOfTransaction, format_brl
+from bot.fintracker import (
+    DuplicateTransactionError,
+    FintrackerClient,
+    FintrackerError,
+    build_transaction_payload,
+)
+
+EXPENSE = TransactionDraft(
+    type_of_transaction=TypeOfTransaction.EXPENSE,
+    amount=Decimal("20"),
+    description="Lanche",
+    registration_date=date(2026, 10, 26),
+    category="Alimentação",
+)
+
+
+@pytest.mark.parametrize(
+    "amount, expected",
+    [
+        (Decimal("20"), "R$ 20,00"),
+        (Decimal("0.5"), "R$ 0,50"),
+        (Decimal("5500"), "R$ 5.500,00"),
+        (Decimal("1234567.89"), "R$ 1.234.567,89"),
+    ],
+)
+def test_format_brl(amount, expected):
+    assert format_brl(amount) == expected
+
+
+def test_expense_payload_uses_registration_date_as_due_date_and_already_paid():
+    assert build_transaction_payload(EXPENSE) == {
+        "description": "Lanche",
+        "amount": "R$ 20,00",
+        "typeOfTransaction": "expense",
+        "registrationDate": "26/10/2026",
+        "dueDate": "26/10/2026",
+        "category": "Alimentação",
+        "status": "already_paid",
+    }
+
+
+def test_income_payload_has_no_due_date_and_is_received():
+    income = TransactionDraft(
+        type_of_transaction=TypeOfTransaction.INCOME,
+        amount=Decimal("5500"),
+        description="Salário",
+        registration_date=date(2026, 10, 5),
+        category="Salário",
+    )
+
+    payload = build_transaction_payload(income)
+
+    assert payload["dueDate"] is None
+    assert payload["status"] == "received"
+    assert payload["amount"] == "R$ 5.500,00"
+
+
+def test_payload_requires_category():
+    with pytest.raises(ValueError):
+        build_transaction_payload(TransactionDraft(**{**EXPENSE.__dict__, "category": None}))
+
+
+class FakeFintracker:
+    """Minimal in-memory stand-in for the fintracker API"""
+
+    def __init__(self) -> None:
+        self.valid_token = "token-1"
+        self.logins = 0
+        self.created: list[dict] = []
+        self.conflict = False
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/users/login":
+            self.logins += 1
+            return httpx.Response(
+                200, json={"accessToken": self.valid_token, "tokenType": "Bearer"}
+            )
+
+        if request.headers.get("Authorization") != f"Bearer {self.valid_token}":
+            return httpx.Response(401, json={"detail": "Token is expired"})
+
+        if request.url.path == "/api/v1/categories/":
+            page = int(request.url.params["page"])
+            pages = {1: (["Alimentação", "Transporte"], 2), 2: (["Salário"], None)}
+            names, next_page = pages[page]
+            return httpx.Response(
+                200, json={"results": [{"name": name} for name in names], "next": next_page}
+            )
+
+        if request.url.path == "/api/v1/transactions/":
+            if self.conflict:
+                return httpx.Response(409, json={"detail": "Já existe"})
+            body = json.loads(request.content)
+            if body["category"] == "Inexistente":
+                return httpx.Response(404, json={"detail": "Category Inexistente not found"})
+            self.created.append(body)
+            return httpx.Response(201, json={"id": 1, **body})
+
+        return httpx.Response(404)
+
+
+@pytest.fixture
+def api() -> FakeFintracker:
+    return FakeFintracker()
+
+
+@pytest.fixture
+def client(api: FakeFintracker) -> FintrackerClient:
+    http_client = httpx.AsyncClient(
+        base_url="http://fintracker/api/v1", transport=httpx.MockTransport(api.handler)
+    )
+    return FintrackerClient(http_client=http_client, username="me", password="secret")
+
+
+async def test_create_transaction_logs_in_once_and_posts_payload(client, api):
+    await client.create_transaction(EXPENSE)
+    await client.create_transaction(EXPENSE)
+
+    assert api.logins == 1
+    assert api.created == [build_transaction_payload(EXPENSE)] * 2
+
+
+async def test_expired_token_triggers_new_login_and_retry(client, api):
+    await client.create_transaction(EXPENSE)
+    api.valid_token = "token-2"
+
+    await client.create_transaction(EXPENSE)
+
+    assert api.logins == 2
+    assert len(api.created) == 2
+
+
+async def test_conflict_raises_duplicate_error(client, api):
+    api.conflict = True
+
+    with pytest.raises(DuplicateTransactionError):
+        await client.create_transaction(EXPENSE)
+
+
+async def test_other_errors_carry_api_detail(client):
+    with pytest.raises(FintrackerError) as exc_info:
+        await client.create_transaction(
+            TransactionDraft(**{**EXPENSE.__dict__, "category": "Inexistente"})
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.message == "Category Inexistente not found"
+
+
+async def test_list_category_names_follows_pagination(client):
+    assert await client.list_category_names() == ["Alimentação", "Transporte", "Salário"]
