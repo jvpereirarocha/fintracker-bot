@@ -1,0 +1,10 @@
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: fintracker-bot-configmap
+  namespace: fintracker-dev
+data:
+  # Talks to the fintracker API through its Service, inside the cluster
+  FINTRACKER_API_URL: "http://fintracker-svc.fintracker-dev.svc.cluster.local:8000/api/v1"
+  ANTHROPIC_MODEL: "claude-haiku-5-5"
+  TIMEZONE: "America/Sao_Paulo"

@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY bot ./bot
 
-RUN useradd --create-home botuser
-USER botuser
+RUN useradd --uid 10001 --user-group --no-create-home botuser
+USER 10001
 
 CMD ["python", "-m", "bot.main"]

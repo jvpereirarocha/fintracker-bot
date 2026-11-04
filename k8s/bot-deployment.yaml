@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fintracker-bot-deployment
+  namespace: fintracker-dev
+spec:
+  # Telegram long polling allows a single consumer per bot token, and pending
+  # category choices live in memory: never run more than one replica
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: fintracker-bot
+  template:
+    metadata:
+      labels:
+        app: fintracker-bot
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      containers:
+        - name: fintracker-bot
+          image: jvrochadev/fintracker-bot:latest
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: fintracker-bot-configmap
+            - secretRef:
+                name: fintracker-bot-secrets
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

@@ -45,6 +45,28 @@ docker build -t fintracker-bot .
 docker run --env-file .env fintracker-bot
 ```
 
+## Kubernetes (homelab)
+
+Os manifests em `k8s/` rodam o bot no namespace `fintracker-dev`, ao lado da API, que é acessada
+pelo Service `fintracker-svc`. O bot usa uma réplica só, com estratégia `Recreate`: o Telegram aceita
+um único consumidor de *polling* por token, e as escolhas de categoria pendentes ficam em memória.
+
+```bash
+# 1. Publicar a imagem
+docker build -t jvrochadev/fintracker-bot:latest .
+docker push jvrochadev/fintracker-bot:latest
+
+# 2. Segredos (k8s/bot-secrets.yaml é ignorado pelo git)
+cp k8s/bot-secrets.example.yaml k8s/bot-secrets.yaml   # preencha os valores
+
+# 3. Aplicar
+kubectl apply -f k8s/bot-configmap.yaml -f k8s/bot-secrets.yaml -f k8s/bot-deployment.yaml
+kubectl -n fintracker-dev logs -f deploy/fintracker-bot-deployment
+```
+
+Para atualizar depois de publicar uma imagem nova:
+`kubectl -n fintracker-dev rollout restart deploy/fintracker-bot-deployment`.
+
 ## Desenvolvimento
 
 ```bash
