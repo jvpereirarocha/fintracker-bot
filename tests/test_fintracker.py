@@ -68,6 +68,20 @@ def test_payload_requires_category():
         build_transaction_payload(TransactionDraft(**{**EXPENSE.__dict__, "category": None}))
 
 
+def stored(id_, description, status, due_date, type_="expense", category_id=1, amount="R$ 150,90"):
+    """A transaction in the shape fintracker's API returns it"""
+    return {
+        "id": id_,
+        "description": description,
+        "amount": amount,
+        "typeOfTransaction": type_,
+        "status": status,
+        "registrationDate": "01/10/2026",
+        "dueDate": due_date,
+        "categoryId": category_id,
+    }
+
+
 class FakeFintracker:
     """Minimal in-memory stand-in for the fintracker API"""
 
@@ -76,6 +90,13 @@ class FakeFintracker:
         self.logins = 0
         self.created: list[dict] = []
         self.conflict = False
+        self.updates: list[tuple[int, dict]] = []
+        self.transactions = {
+            1: stored(1, "Luz", "not_paid", "10/11/2026"),
+            2: stored(2, "Internet", "paying", "05/11/2026", category_id=2),
+            3: stored(3, "Lanche", "already_paid", "01/10/2026"),
+            4: stored(4, "Salário", "received", "", type_="income", category_id=3),
+        }
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/v1/users/login":
@@ -89,11 +110,35 @@ class FakeFintracker:
 
         if request.url.path == "/api/v1/categories/":
             page = int(request.url.params["page"])
-            pages = {1: (["Alimentação", "Transporte"], 2), 2: (["Salário"], None)}
-            names, next_page = pages[page]
+            pages = {1: ([(1, "Moradia"), (2, "Transporte")], 2), 2: ([(3, "Salário")], None)}
+            categories, next_page = pages[page]
+            results = [{"categoryId": id_, "name": name} for id_, name in categories]
+            return httpx.Response(200, json={"results": results, "next": next_page})
+
+        if request.url.path == "/api/v1/transactions/" and request.method == "GET":
+            # One item per page, so pagination is exercised too
+            params = request.url.params
+            matches = [
+                t
+                for t in self.transactions.values()
+                if t["typeOfTransaction"] == params["typeOfTransaction"]
+                and t["status"] == params["status"]
+            ]
+            page = int(params["page"])
+            next_page = page + 1 if page < len(matches) else None
             return httpx.Response(
-                200, json={"results": [{"name": name} for name in names], "next": next_page}
+                200, json={"transactions": matches[page - 1 : page], "next": next_page}
             )
+
+        if request.url.path.startswith("/api/v1/transactions/") and request.method != "POST":
+            transaction_id = int(request.url.path.rsplit("/", 1)[1])
+            if transaction_id not in self.transactions:
+                return httpx.Response(404, json={"detail": "Transaction not found"})
+            if request.method == "PUT":
+                body = json.loads(request.content)
+                self.updates.append((transaction_id, body))
+                self.transactions[transaction_id]["status"] = body["status"]
+            return httpx.Response(200, json=self.transactions[transaction_id])
 
         if request.url.path == "/api/v1/transactions/":
             if self.conflict:
@@ -156,4 +201,52 @@ async def test_other_errors_carry_api_detail(client):
 
 
 async def test_list_category_names_follows_pagination(client):
-    assert await client.list_category_names() == ["Alimentação", "Transporte", "Salário"]
+    assert await client.list_category_names() == ["Moradia", "Transporte", "Salário"]
+
+
+async def test_list_pending_expenses_merges_both_statuses_sorted_by_due_date(client):
+    expenses = await client.list_pending_expenses()
+
+    assert [(e.transaction_id, e.status) for e in expenses] == [(2, "paying"), (1, "not_paid")]
+    assert expenses[1].amount == Decimal("150.90")
+    assert expenses[1].due_date == date(2026, 11, 10)
+
+
+async def test_mark_as_paid_sends_whole_transaction_with_category_name(client, api):
+    paid = await client.mark_as_paid(1)
+
+    assert paid.status == "already_paid"
+    assert api.updates == [
+        (
+            1,
+            {
+                "description": "Luz",
+                "amount": "R$ 150,90",
+                "typeOfTransaction": "expense",
+                "registrationDate": "01/10/2026",
+                "dueDate": "10/11/2026",
+                "category": "Moradia",
+                "status": "already_paid",
+            },
+        )
+    ]
+
+
+async def test_mark_as_paid_skips_update_when_already_paid(client, api):
+    paid = await client.mark_as_paid(3)
+
+    assert paid.status == "already_paid"
+    assert api.updates == []
+
+
+async def test_mark_as_paid_refuses_income(client, api):
+    with pytest.raises(FintrackerError):
+        await client.mark_as_paid(4)
+    assert api.updates == []
+
+
+async def test_mark_as_paid_unknown_transaction_carries_api_detail(client):
+    with pytest.raises(FintrackerError) as exc_info:
+        await client.mark_as_paid(99)
+
+    assert exc_info.value.status_code == 404

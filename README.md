@@ -25,6 +25,14 @@ Valores padrão quando a mensagem não diz:
 | `dueDate` | igual a `registrationDate` | — |
 | `status` | `already_paid` | `received` |
 
+## Comandos
+
+- `/pendentes`: lista as despesas com status `not_paid` ou `paying`, ordenadas por vencimento
+  (marcando as vencidas), com o total e um botão por despesa para marcá-la como paga. Antes de
+  atualizar, o bot relê a transação no fintracker, para não sobrescrever alterações feitas em
+  outro lugar.
+- `/help`: exemplos de uso.
+
 O bot usa uma conta fixa do fintracker (`FINTRACKER_USERNAME`/`FINTRACKER_PASSWORD`) e só responde
 ao usuário do Telegram configurado em `TELEGRAM_ALLOWED_USER_ID`. O token JWT é renovado
 automaticamente quando a API responde 401.

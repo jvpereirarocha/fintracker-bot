@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from anthropic import AsyncAnthropic
+from telegram import BotCommand
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -15,8 +16,11 @@ from bot.fintracker import FintrackerClient
 from bot.handlers import (
     CANCEL_CALLBACK,
     CATEGORY_CALLBACK_PREFIX,
+    PAID_CALLBACK_PREFIX,
     handle_category_choice,
+    handle_mark_as_paid,
     handle_text,
+    list_pending,
     start,
 )
 from bot.parser import TransactionParser
@@ -39,12 +43,23 @@ def build_application(settings: Settings) -> Application:  # type: ignore[type-a
         await http_client.aclose()
         await anthropic_client.close()
 
+    async def register_commands(app: Application) -> None:  # type: ignore[type-arg]
+        # Shows the commands in Telegram's "/" menu
+        await app.bot.set_my_commands(
+            [
+                BotCommand("pendentes", "Despesas ainda não pagas"),
+                BotCommand("help", "Como usar o bot"),
+            ]
+        )
+
     application = (
         Application.builder()
         .token(settings.TELEGRAM_BOT_TOKEN)
+        .post_init(register_commands)
         .post_shutdown(close_clients)
         .build()
     )
+    application.bot_data["owner_id"] = settings.TELEGRAM_ALLOWED_USER_ID
     application.bot_data["fintracker"] = FintrackerClient(
         http_client=http_client,
         username=settings.FINTRACKER_USERNAME,
@@ -58,6 +73,10 @@ def build_application(settings: Settings) -> Application:  # type: ignore[type-a
     # Only the owner of the fintracker account can use the bot; everyone else is ignored
     owner = filters.User(user_id=settings.TELEGRAM_ALLOWED_USER_ID)
     application.add_handler(CommandHandler(["start", "help"], start, filters=owner))
+    application.add_handler(CommandHandler("pendentes", list_pending, filters=owner))
+    application.add_handler(
+        CallbackQueryHandler(handle_mark_as_paid, pattern=rf"^{PAID_CALLBACK_PREFIX}\d+$")
+    )
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & owner, handle_text))
     application.add_handler(
         CallbackQueryHandler(

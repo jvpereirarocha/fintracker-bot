@@ -1,5 +1,6 @@
 import logging
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import anthropic
@@ -7,7 +8,13 @@ import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from bot.domain import TransactionDraft, TypeOfTransaction, format_brazilian_date, format_brl
+from bot.domain import (
+    SavedTransaction,
+    TransactionDraft,
+    TypeOfTransaction,
+    format_brazilian_date,
+    format_brl,
+)
 from bot.fintracker import DuplicateTransactionError, FintrackerClient, FintrackerError
 from bot.parser import ParserRefusedError, TransactionParser
 
@@ -19,12 +26,18 @@ PENDING_CATEGORIES = "pending_categories"
 
 CATEGORY_CALLBACK_PREFIX = "category:"
 CANCEL_CALLBACK = "cancel"
+PAID_CALLBACK_PREFIX = "paid:"
+
+# Keeps the message well under Telegram's 4096 chars and the keyboard usable
+MAX_PENDING_LISTED = 20
 
 HELP_TEXT = (
     "Me mande uma mensagem descrevendo a transação e eu registro no fintracker. Exemplos:\n"
     "• Gastei 20 reais com lanche\n"
     "• Recebi R$ 5.500 de salário do mês\n"
-    "• Paguei 150,90 de conta de luz ontem"
+    "• Paguei 150,90 de conta de luz ontem\n\n"
+    "Comandos:\n"
+    "/pendentes: despesas ainda não pagas, com botões para marcar como paga"
 )
 
 
@@ -43,6 +56,16 @@ def _timezone(context: ContextTypes.DEFAULT_TYPE) -> ZoneInfo:
     return timezone
 
 
+def _today(context: ContextTypes.DEFAULT_TYPE) -> date:
+    return datetime.now(_timezone(context)).date()
+
+
+def _is_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    # CallbackQueryHandler has no `filters` argument, so button presses are checked here
+    user = update.effective_user
+    return user is not None and user.id == context.bot_data["owner_id"]
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message:
         await update.message.reply_text(HELP_TEXT)
@@ -56,8 +79,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     status = await message.reply_text("Processando...")
     try:
         categories = await _fintracker(context).list_category_names()
-        today = datetime.now(_timezone(context)).date()
-        draft = await _parser(context).parse(text=message.text, categories=categories, today=today)
+        draft = await _parser(context).parse(
+            text=message.text, categories=categories, today=_today(context)
+        )
     except (FintrackerError, httpx.HTTPError):
         logger.exception("Failed to load categories from fintracker")
         await status.edit_text("Não consegui falar com o fintracker. Tente novamente mais tarde.")
@@ -98,6 +122,8 @@ async def handle_category_choice(update: Update, context: ContextTypes.DEFAULT_T
     if query is None or query.data is None or context.user_data is None:
         return
     await query.answer()
+    if not _is_owner(update, context):
+        return
 
     draft: TransactionDraft | None = context.user_data.pop(PENDING_DRAFT, None)
     categories: list[str] = context.user_data.pop(PENDING_CATEGORIES, [])
@@ -112,6 +138,91 @@ async def handle_category_choice(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     await query.edit_message_text(await _save(draft.with_category(categories[index]), context))
+
+
+async def list_pending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.message
+    if message is None:
+        return
+
+    status = await message.reply_text("Buscando despesas pendentes...")
+    try:
+        expenses = await _fintracker(context).list_pending_expenses()
+    except (FintrackerError, httpx.HTTPError):
+        logger.exception("Failed to list pending expenses")
+        await status.edit_text("Não consegui falar com o fintracker. Tente novamente mais tarde.")
+        return
+
+    text, keyboard = render_pending(expenses, today=_today(context))
+    await status.edit_text(text, reply_markup=keyboard)
+
+
+async def handle_mark_as_paid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or query.data is None:
+        return
+    if not _is_owner(update, context):
+        await query.answer()
+        return
+
+    transaction_id = int(query.data.removeprefix(PAID_CALLBACK_PREFIX))
+    fintracker = _fintracker(context)
+    try:
+        paid = await fintracker.mark_as_paid(transaction_id)
+        expenses = await fintracker.list_pending_expenses()
+    except FintrackerError as error:
+        logger.error("Failed to mark transaction %s as paid: %s", transaction_id, error.message)
+        await query.answer(f"O fintracker recusou: {error.message}"[:200], show_alert=True)
+        return
+    except httpx.HTTPError:
+        logger.exception("Failed to reach fintracker")
+        await query.answer("Não consegui falar com o fintracker.", show_alert=True)
+        return
+
+    await query.answer("Marcada como paga")
+    text, keyboard = render_pending(expenses, today=_today(context))
+    header = f"✅ {paid.description} ({format_brl(paid.amount)}) marcada como paga.\n\n"
+    await query.edit_message_text(header + text, reply_markup=keyboard)
+
+
+def render_pending(
+    expenses: list[SavedTransaction], today: date
+) -> tuple[str, InlineKeyboardMarkup | None]:
+    """The /pendentes message: one line and one "pay" button per expense"""
+    if not expenses:
+        return "Nenhuma despesa pendente. 🎉", None
+
+    total = sum((expense.amount for expense in expenses), start=Decimal(0))
+    shown = expenses[:MAX_PENDING_LISTED]
+    lines = [f"Despesas pendentes ({len(expenses)}), total {format_brl(total)}:", ""]
+    for number, expense in enumerate(shown, start=1):
+        lines.append(f"{number}. {expense.description}: {format_brl(expense.amount)}")
+        lines.append(f"    {_due_label(expense, today)}")
+    if len(expenses) > len(shown):
+        lines.append("")
+        lines.append(f"... e mais {len(expenses) - len(shown)}. Pague estas para ver as demais.")
+
+    buttons = [
+        [
+            InlineKeyboardButton(
+                f"✅ {number}. {expense.description}"[:60],
+                callback_data=f"{PAID_CALLBACK_PREFIX}{expense.transaction_id}",
+            )
+        ]
+        for number, expense in enumerate(shown, start=1)
+    ]
+    return "\n".join(lines), InlineKeyboardMarkup(buttons)
+
+
+def _due_label(expense: SavedTransaction, today: date) -> str:
+    if expense.due_date is None:
+        return "sem vencimento"
+    due = format_brazilian_date(expense.due_date)
+    if expense.due_date < today:
+        return f"⚠️ venceu em {due}"
+    if expense.due_date == today:
+        return "⏰ vence hoje"
+    return f"vence em {due}"
 
 
 async def _save(draft: TransactionDraft, context: ContextTypes.DEFAULT_TYPE) -> str:
