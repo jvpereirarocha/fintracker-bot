@@ -31,6 +31,9 @@ Valores padrão quando a mensagem não diz:
   (marcando as vencidas), com o total e um botão por despesa para marcá-la como paga. Antes de
   atualizar, o bot relê a transação no fintracker, para não sobrescrever alterações feitas em
   outro lugar.
+- `/ultimas`: as 10 últimas transações cadastradas, pelo bot ou pela interface web, da mais nova
+  para a mais antiga, com valor, data de registro, categoria e status. A ordem de cadastro vem do
+  `orderBy=id` do `GET /transactions/`, que exige uma versão do fintracker que tenha esse parâmetro.
 - `/help`: exemplos de uso.
 
 O bot usa uma conta fixa do fintracker (`FINTRACKER_USERNAME`/`FINTRACKER_PASSWORD`) e só responde

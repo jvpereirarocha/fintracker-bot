@@ -195,6 +195,20 @@ class FintrackerClient:
 
         return sorted(expenses, key=lambda e: (e.due_date or e.registration_date, e.transaction_id))
 
+    async def list_latest_transactions(self, limit: int) -> list[SavedTransaction]:
+        """The last transactions created, from the bot or the web app, newest first"""
+        response = await self._request(
+            "GET",
+            "/transactions/",
+            params={"orderBy": "id", "page": 1, "itemsPerPage": limit},
+        )
+        if response.status_code != HTTPStatus.OK:
+            raise FintrackerError(
+                message=f"Falha ao listar transações: {_error_detail(response)}",
+                status_code=response.status_code,
+            )
+        return [parse_transaction(item) for item in response.json()["transactions"]]
+
     async def get_transaction(self, transaction_id: int) -> SavedTransaction:
         response = await self._request("GET", f"/transactions/{transaction_id}")
         if response.status_code != HTTPStatus.OK:

@@ -20,6 +20,7 @@ from bot.handlers import (
     handle_category_choice,
     handle_mark_as_paid,
     handle_text,
+    list_latest,
     list_pending,
     start,
 )
@@ -48,6 +49,7 @@ def build_application(settings: Settings) -> Application:  # type: ignore[type-a
         await app.bot.set_my_commands(
             [
                 BotCommand("pendentes", "Despesas ainda não pagas"),
+                BotCommand("ultimas", "Últimas transações cadastradas"),
                 BotCommand("help", "Como usar o bot"),
             ]
         )
@@ -74,6 +76,7 @@ def build_application(settings: Settings) -> Application:  # type: ignore[type-a
     owner = filters.User(user_id=settings.TELEGRAM_ALLOWED_USER_ID)
     application.add_handler(CommandHandler(["start", "help"], start, filters=owner))
     application.add_handler(CommandHandler("pendentes", list_pending, filters=owner))
+    application.add_handler(CommandHandler("ultimas", list_latest, filters=owner))
     application.add_handler(
         CallbackQueryHandler(handle_mark_as_paid, pattern=rf"^{PAID_CALLBACK_PREFIX}\d+$")
     )

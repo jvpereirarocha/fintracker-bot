@@ -9,6 +9,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from bot.domain import (
+    ExpenseStatus,
     SavedTransaction,
     TransactionDraft,
     TypeOfTransaction,
@@ -30,6 +31,14 @@ PAID_CALLBACK_PREFIX = "paid:"
 
 # Keeps the message well under Telegram's 4096 chars and the keyboard usable
 MAX_PENDING_LISTED = 20
+LATEST_LISTED = 10
+
+STATUS_LABELS: dict[str, str] = {
+    ExpenseStatus.ALREADY_PAID: "paga",
+    ExpenseStatus.NOT_PAID: "não paga",
+    ExpenseStatus.PAYING: "pagando",
+    "received": "recebida",
+}
 
 HELP_TEXT = (
     "Me mande uma mensagem descrevendo a transação e eu registro no fintracker. Exemplos:\n"
@@ -37,7 +46,8 @@ HELP_TEXT = (
     "• Recebi R$ 5.500 de salário do mês\n"
     "• Paguei 150,90 de conta de luz ontem\n\n"
     "Comandos:\n"
-    "/pendentes: despesas ainda não pagas, com botões para marcar como paga"
+    "/pendentes: despesas ainda não pagas, com botões para marcar como paga\n"
+    f"/ultimas: as {LATEST_LISTED} últimas transações cadastradas"
 )
 
 
@@ -155,6 +165,43 @@ async def list_pending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     text, keyboard = render_pending(expenses, today=_today(context))
     await status.edit_text(text, reply_markup=keyboard)
+
+
+async def list_latest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.message
+    if message is None:
+        return
+
+    status = await message.reply_text("Buscando as últimas transações...")
+    fintracker = _fintracker(context)
+    try:
+        transactions = await fintracker.list_latest_transactions(LATEST_LISTED)
+        categories = await fintracker.list_categories()
+    except (FintrackerError, httpx.HTTPError):
+        logger.exception("Failed to list latest transactions")
+        await status.edit_text("Não consegui falar com o fintracker. Tente novamente mais tarde.")
+        return
+
+    await status.edit_text(render_latest(transactions, categories))
+
+
+def render_latest(transactions: list[SavedTransaction], categories: dict[int, str]) -> str:
+    """The /ultimas message: one entry per transaction, newest first"""
+    if not transactions:
+        return "Nenhuma transação cadastrada ainda."
+
+    lines = [f"Últimas {len(transactions)} transações:", ""]
+    for number, transaction in enumerate(transactions, start=1):
+        is_expense = transaction.type_of_transaction == TypeOfTransaction.EXPENSE
+        sign = "🔴 -" if is_expense else "🟢 +"
+        lines.append(f"{number}. {sign}{format_brl(transaction.amount)} {transaction.description}")
+        details = [format_brazilian_date(transaction.registration_date)]
+        category = categories.get(transaction.category_id) if transaction.category_id else None
+        if category:
+            details.append(category)
+        details.append(STATUS_LABELS.get(transaction.status, transaction.status))
+        lines.append(f"    {' · '.join(details)}")
+    return "\n".join(lines)
 
 
 async def handle_mark_as_paid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

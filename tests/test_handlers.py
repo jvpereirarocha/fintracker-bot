@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 from bot.domain import SavedTransaction, TypeOfTransaction, parse_brazilian_date, parse_brl
-from bot.handlers import MAX_PENDING_LISTED, PAID_CALLBACK_PREFIX, render_pending
+from bot.handlers import MAX_PENDING_LISTED, PAID_CALLBACK_PREFIX, render_latest, render_pending
 
 TODAY = date(2026, 11, 5)
 
@@ -64,3 +64,35 @@ def test_brazilian_parsers():
     assert parse_brl("R$ 1.234,56") == Decimal("1234.56")
     assert parse_brazilian_date("26/10/2026") == date(2026, 10, 26)
     assert parse_brazilian_date("") is None
+
+
+def test_render_latest_without_transactions():
+    assert render_latest([], categories={}) == "Nenhuma transação cadastrada ainda."
+
+
+def test_render_latest_shows_sign_date_category_and_status():
+    salary = SavedTransaction(
+        transaction_id=12,
+        type_of_transaction=TypeOfTransaction.INCOME,
+        description="Salário",
+        amount=Decimal("5500"),
+        status="received",
+        registration_date=date(2026, 11, 5),
+        due_date=None,
+        category_id=3,
+    )
+    snack = expense(11, "Lanche", TODAY, "20")
+    orphan = SavedTransaction(**{**expense(10, "Sem categoria", None).__dict__, "category_id": 99})
+
+    text = render_latest([salary, snack, orphan], categories={1: "Alimentação", 3: "Salário"})
+
+    assert text.splitlines() == [
+        "Últimas 3 transações:",
+        "",
+        "1. 🟢 +R$ 5.500,00 Salário",
+        "    05/11/2026 · Salário · recebida",
+        "2. 🔴 -R$ 20,00 Lanche",
+        "    01/10/2026 · Alimentação · não paga",
+        "3. 🔴 -R$ 10,00 Sem categoria",
+        "    01/10/2026 · não paga",
+    ]

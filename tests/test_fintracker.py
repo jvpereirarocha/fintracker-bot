@@ -91,6 +91,7 @@ class FakeFintracker:
         self.created: list[dict] = []
         self.conflict = False
         self.updates: list[tuple[int, dict]] = []
+        self.latest_params: dict[str, str] = {}
         self.transactions = {
             1: stored(1, "Luz", "not_paid", "10/11/2026"),
             2: stored(2, "Internet", "paying", "05/11/2026", category_id=2),
@@ -116,8 +117,14 @@ class FakeFintracker:
             return httpx.Response(200, json={"results": results, "next": next_page})
 
         if request.url.path == "/api/v1/transactions/" and request.method == "GET":
-            # One item per page, so pagination is exercised too
             params = request.url.params
+            if params.get("orderBy") == "id":
+                self.latest_params = dict(params)
+                newest = sorted(self.transactions.values(), key=lambda t: -t["id"])
+                limit = int(params["itemsPerPage"])
+                return httpx.Response(200, json={"transactions": newest[:limit], "next": 2})
+
+            # One item per page, so pagination is exercised too
             matches = [
                 t
                 for t in self.transactions.values()
@@ -250,3 +257,11 @@ async def test_mark_as_paid_unknown_transaction_carries_api_detail(client):
         await client.mark_as_paid(99)
 
     assert exc_info.value.status_code == 404
+
+
+async def test_list_latest_transactions_asks_for_creation_order_in_one_page(client, api):
+    latest = await client.list_latest_transactions(3)
+
+    assert [t.transaction_id for t in latest] == [4, 3, 2]
+    assert api.latest_params == {"orderBy": "id", "page": "1", "itemsPerPage": "3"}
+    assert latest[0].type_of_transaction == TypeOfTransaction.INCOME
