@@ -39,15 +39,20 @@ def build_transaction_payload(draft: TransactionDraft) -> dict[str, Any]:
 
     registration_date = format_brazilian_date(draft.registration_date)
     is_expense = draft.type_of_transaction == TypeOfTransaction.EXPENSE
+    if is_expense:
+        due_date: str | None = format_brazilian_date(draft.due_date or draft.registration_date)
+        status = EXPENSE_DEFAULT_STATUS if draft.is_paid else ExpenseStatus.NOT_PAID.value
+    else:
+        due_date, status = None, INCOME_DEFAULT_STATUS
 
     return {
         "description": draft.description,
         "amount": format_brl(draft.amount),
         "typeOfTransaction": draft.type_of_transaction.value,
         "registrationDate": registration_date,
-        "dueDate": registration_date if is_expense else None,
+        "dueDate": due_date,
         "category": draft.category,
-        "status": EXPENSE_DEFAULT_STATUS if is_expense else INCOME_DEFAULT_STATUS,
+        "status": status,
     }
 
 

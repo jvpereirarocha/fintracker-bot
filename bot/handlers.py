@@ -44,7 +44,8 @@ HELP_TEXT = (
     "Me mande uma mensagem descrevendo a transação e eu registro no fintracker. Exemplos:\n"
     "• Gastei 20 reais com lanche\n"
     "• Recebi R$ 5.500 de salário do mês\n"
-    "• Paguei 150,90 de conta de luz ontem\n\n"
+    "• Paguei 150,90 de conta de luz ontem\n"
+    "• Conta de internet de 99,90 vence dia 10 (fica pendente)\n\n"
     "Comandos:\n"
     "/pendentes: despesas ainda não pagas, com botões para marcar como paga\n"
     f"/ultimas: as {LATEST_LISTED} últimas transações cadastradas"
@@ -298,6 +299,10 @@ def _summary(draft: TransactionDraft) -> str:
         f"Valor: {format_brl(draft.amount)}",
         f"Data: {format_brazilian_date(draft.registration_date)}",
     ]
+    if draft.type_of_transaction == TypeOfTransaction.EXPENSE:
+        if draft.due_date and draft.due_date != draft.registration_date:
+            lines.append(f"Vencimento: {format_brazilian_date(draft.due_date)}")
+        lines.append("Situação: ✅ paga" if draft.is_paid else "Situação: ⏳ pendente")
     if draft.category:
         lines.append(f"Categoria: {draft.category}")
     return "\n".join(lines)

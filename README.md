@@ -22,8 +22,14 @@ Valores padrão quando a mensagem não diz:
 | Campo | Despesa | Receita |
 |---|---|---|
 | `registrationDate` | hoje (fuso de `TIMEZONE`) | hoje |
-| `dueDate` | igual a `registrationDate` | — |
-| `status` | `already_paid` | `received` |
+| `dueDate` | o vencimento citado ("vence dia 10"), senão igual a `registrationDate` | — |
+| `status` | `already_paid`, ou `not_paid` se a mensagem diz que ainda falta pagar | `received` |
+
+Uma despesa fica pendente (`not_paid`) quando a mensagem diz que ela ainda vai ser paga, como em
+"Conta de internet de 99,90 vence dia 10" ou "Tenho que pagar 1500 de aluguel dia 3". O fintracker
+não aceita vencimento anterior à data de registro, então uma conta pendente que já venceu ("venceu
+dia 1 e não paguei") é registrada na data do vencimento. Já uma despesa paga com vencimento passado
+mantém a data do pagamento.
 
 ## Comandos
 

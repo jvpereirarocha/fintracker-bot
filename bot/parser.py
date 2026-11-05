@@ -29,6 +29,13 @@ letter and without the amount, verbs or payment method. Examples: "Lanche", "Sal
 written in the list. Use null when none clearly fits; the person will be asked to choose.
 - registration_date: the date the transaction happened, as YYYY-MM-DD. Resolve relative dates \
 ("ontem", "sexta passada") from today's date. Use null when the message doesn't mention a date.
+- is_paid: only for expenses (null for income). false when the message says the expense still \
+has to be paid: "tenho que pagar", "a pagar", "vence dia 10", "venceu e não paguei", "boleto \
+pendente", "conta pra pagar". true when it was already paid or when the message doesn't say.
+- due_date: only for expenses, the due date ("vence", "vencimento", "venceu") as YYYY-MM-DD. A day \
+without a month ("dia 10") follows the verb tense: for "vence dia 10" it is the next day 10 from \
+today (this month or the next), for "venceu dia 10" the last day 10 up to today. Use null when \
+the message doesn't mention a due date.
 """
 
 
@@ -39,6 +46,8 @@ class TransactionExtraction(BaseModel):
     description: str | None
     category: str | None
     registration_date: str | None = Field(description="YYYY-MM-DD")
+    is_paid: bool | None = None
+    due_date: str | None = Field(default=None, description="YYYY-MM-DD")
 
 
 class ParserRefusedError(Exception):
@@ -97,12 +106,29 @@ def to_draft(
     ):
         return None
 
+    type_of_transaction = TypeOfTransaction(extraction.type_of_transaction)
+    registration_date = _parse_date(extraction.registration_date) or today
+    is_paid = True
+    due_date = None
+    if type_of_transaction == TypeOfTransaction.EXPENSE:
+        is_paid = extraction.is_paid is not False
+        due_date = _parse_date(extraction.due_date)
+        # fintracker rejects a due date before the registration date. A pending bill that is
+        # already overdue is registered on its due date; a paid one keeps the payment date.
+        if due_date and due_date < registration_date:
+            if is_paid:
+                due_date = registration_date
+            else:
+                registration_date = due_date
+
     return TransactionDraft(
-        type_of_transaction=TypeOfTransaction(extraction.type_of_transaction),
+        type_of_transaction=type_of_transaction,
         amount=Decimal(extraction.amount_in_cents) / 100,
         description=extraction.description.strip(),
-        registration_date=_parse_date(extraction.registration_date) or today,
+        registration_date=registration_date,
         category=_match_category(extraction.category, categories),
+        is_paid=is_paid,
+        due_date=due_date,
     )
 
 

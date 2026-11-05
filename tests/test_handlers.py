@@ -1,8 +1,20 @@
 from datetime import date
 from decimal import Decimal
 
-from bot.domain import SavedTransaction, TypeOfTransaction, parse_brazilian_date, parse_brl
-from bot.handlers import MAX_PENDING_LISTED, PAID_CALLBACK_PREFIX, render_latest, render_pending
+from bot.domain import (
+    SavedTransaction,
+    TransactionDraft,
+    TypeOfTransaction,
+    parse_brazilian_date,
+    parse_brl,
+)
+from bot.handlers import (
+    MAX_PENDING_LISTED,
+    PAID_CALLBACK_PREFIX,
+    _summary,
+    render_latest,
+    render_pending,
+)
 
 TODAY = date(2026, 11, 5)
 
@@ -96,3 +108,34 @@ def test_render_latest_shows_sign_date_category_and_status():
         "3. 🔴 -R$ 10,00 Sem categoria",
         "    01/10/2026 · não paga",
     ]
+
+
+def draft(**overrides) -> TransactionDraft:
+    fields = {
+        "type_of_transaction": TypeOfTransaction.EXPENSE,
+        "amount": Decimal("99.90"),
+        "description": "Internet",
+        "registration_date": TODAY,
+        "category": "Moradia",
+    }
+    return TransactionDraft(**{**fields, **overrides})
+
+
+def test_summary_of_pending_expense_shows_due_date_and_status():
+    text = _summary(draft(is_paid=False, due_date=date(2026, 11, 10)))
+
+    assert "Vencimento: 10/11/2026" in text
+    assert "Situação: ⏳ pendente" in text
+
+
+def test_summary_of_paid_expense_hides_due_date_equal_to_registration():
+    text = _summary(draft(due_date=TODAY))
+
+    assert "Vencimento" not in text
+    assert "Situação: ✅ paga" in text
+
+
+def test_summary_of_income_has_no_status():
+    text = _summary(draft(type_of_transaction=TypeOfTransaction.INCOME))
+
+    assert "Situação" not in text

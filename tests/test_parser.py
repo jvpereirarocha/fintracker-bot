@@ -106,3 +106,49 @@ async def test_parse_raises_on_refusal():
 
     with pytest.raises(ParserRefusedError):
         await parser.parse("...", CATEGORIES, TODAY)
+
+
+def test_expense_is_paid_by_default_without_due_date():
+    draft = to_draft(extraction(), CATEGORIES, TODAY)
+
+    assert draft is not None
+    assert draft.is_paid is True
+    assert draft.due_date is None
+
+
+def test_pending_expense_keeps_due_date():
+    draft = to_draft(extraction(is_paid=False, due_date="2026-11-10"), CATEGORIES, TODAY)
+
+    assert draft is not None
+    assert draft.is_paid is False
+    assert draft.due_date == date(2026, 11, 10)
+    assert draft.registration_date == TODAY
+
+
+def test_overdue_pending_expense_is_registered_on_its_due_date():
+    # fintracker rejects a due date before the registration date
+    draft = to_draft(extraction(is_paid=False, due_date="2026-10-20"), CATEGORIES, TODAY)
+
+    assert draft is not None
+    assert draft.registration_date == date(2026, 10, 20)
+    assert draft.due_date == date(2026, 10, 20)
+
+
+def test_paid_expense_with_past_due_date_keeps_payment_date():
+    draft = to_draft(extraction(is_paid=True, due_date="2026-10-20"), CATEGORIES, TODAY)
+
+    assert draft is not None
+    assert draft.registration_date == TODAY
+    assert draft.due_date == TODAY
+
+
+def test_income_ignores_pending_fields():
+    draft = to_draft(
+        extraction(type_of_transaction="income", is_paid=False, due_date="2026-11-10"),
+        CATEGORIES,
+        TODAY,
+    )
+
+    assert draft is not None
+    assert draft.is_paid is True
+    assert draft.due_date is None

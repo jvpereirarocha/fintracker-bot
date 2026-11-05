@@ -63,6 +63,18 @@ def test_income_payload_has_no_due_date_and_is_received():
     assert payload["amount"] == "R$ 5.500,00"
 
 
+def test_pending_expense_payload_is_not_paid_with_its_due_date():
+    pending = TransactionDraft(
+        **{**EXPENSE.__dict__, "is_paid": False, "due_date": date(2026, 11, 10)}
+    )
+
+    payload = build_transaction_payload(pending)
+
+    assert payload["status"] == "not_paid"
+    assert payload["dueDate"] == "10/11/2026"
+    assert payload["registrationDate"] == "26/10/2026"
+
+
 def test_payload_requires_category():
     with pytest.raises(ValueError):
         build_transaction_payload(TransactionDraft(**{**EXPENSE.__dict__, "category": None}))

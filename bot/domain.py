@@ -18,6 +18,9 @@ class TransactionDraft:
     description: str
     registration_date: date
     category: str | None
+    # Only meaningful for expenses: pending ones are saved as not_paid
+    is_paid: bool = True
+    due_date: date | None = None
 
     def with_category(self, category: str) -> "TransactionDraft":
         return replace(self, category=category)
